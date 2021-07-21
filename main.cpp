@@ -212,8 +212,9 @@ vector<Parallel> findParallel(vector<Mat> boxes) {
 		for (int j = 0; j < store.size(); j++) {
 			int ifCorrect = countNonZero(result.one - store[j]) && countNonZero(result.two - store[j]);
 			if (ifCorrect != 0) {
-				ifCorrect += 0;
+				ifCorrects += 1;
 			}
+
 		}
 		if (ifCorrects == 0) {
 			twoParallel.push_back(Parallel{ result.one, result.two });
@@ -245,22 +246,89 @@ vector<Point2f> turnToContours(Mat box) {
 
 
 /**
+* @brief 姿态与位置解算
+*
+* @param length 物体的长度
+* @param width 物体的宽度
+* @param fact_points 二维实际点
+* @return vector<Mat> result 旋转向量与平移向量
+*/
+vector<Mat> pnpCalculate(double length,double width,vector<Point2f> fact_points) {
+	//装甲板的半长与半宽
+	double half_length = length / 2;
+	double half_width = width / 2;
+
+	//相机内参与畸变矩阵
+	double camD[9] = { 1.2853517927598091e+03, 0., 3.1944768628958542e+02, 0.,
+	  1.2792339468697937e+03, 2.3929354061292258e+02, 0., 0., 1. };
+	double disD[5] = { 6.3687295852461456e-01, -1.9748008790347320e+00,
+	   3.0970703651800782e-02, 2.1944646842516919e-03, 0. };
+	Mat cam= Mat(3, 3, CV_64FC1, camD);
+	Mat dis= Mat(5, 1, CV_64FC1, disD);
+	
+
+	//自定义物体的世界坐标
+	vector<Point3f> obj = vector<Point3f>{
+		Point3f(-half_length,half_width,0),
+		Point3f(half_length,half_width,0),
+		Point3f(-half_length,-half_width,0),
+		Point3f(half_length,-half_width,0)
+	};
+
+	//定义旋转向量与平移向量
+	Mat rVec = Mat::zeros(3, 1, CV_64FC1);
+	Mat tVec = Mat::zeros(3, 1, CV_64FC1);
+
+	solvePnP(obj, fact_points, cam, dis, rVec, tVec, false, SOLVEPNP_ITERATIVE);
+
+	//储存两个向量的结果
+	vector<Mat> result;
+	result.push_back(rVec);
+	result.push_back(tVec);
+	return result;
+}
+
+
+/**
 * @brief 画出目标点
 *
 * @param img 一开始的图像
 * @param box_first 平行的其中一个轮廓
 * @param box_second 平行的另外一个轮廓
+* @param time 第几个轮廓
 */
-void picture(Mat &img,vector<Point2f> box_first, vector<Point2f>box_second) {
+void picture(Mat &img,vector<Point2f> box_first, vector<Point2f>box_second,int time) {
+	//储存五个点
 	vector<Point> center;
-	center.push_back(Point(middle(box_first[0], box_first[1])));
-	center.push_back(Point(middle(box_second[0], box_second[1])));
-	center.push_back(Point(middle(box_first[2], box_first[3])));
-	center.push_back(Point(middle(box_second[2], box_second[3])));
+	//储存塞进pnp的四个点
+	vector<Point2f> fact_points;
+	for (int i = 0; i < 4; i += 2) {
+		Point2f first = middle(box_first[i], box_first[i+1]);
+		Point2f second = middle(box_second[i], box_second[i+1]);
+		fact_points.push_back(first);
+		fact_points.push_back(second);
+		center.push_back(Point(first));
+		center.push_back(Point(second));
+	}
+
 	center.push_back(Point(middle(middle(Point2f(center[0]), Point2f(center[3])), middle(Point2f(center[1]), Point2f(center[2])))));
 	for (int i = 0; i < 5; i++) {
-		circle(img, center[i], 1, Scalar(0, 0, 255), 5);
+		circle(img, center[i], 1, Scalar(255,0, 0), 5);
 	}
+
+	//储存两个变量的矩阵
+	vector<Mat> rtVec= pnpCalculate(67.5, 26.5, fact_points);
+	//旋转矩阵
+	Mat rotM= Mat::zeros(3, 3, CV_64FC1);
+
+	Mat rVec = rtVec[0];
+	Mat tVec = rtVec[1];
+	Rodrigues(rVec, rotM);
+	invert(rotM, rotM, DECOMP_LU);
+	Mat result =rotM*tVec*-1;
+	double distance= sqrt(pow(result.at<double>(0,0), 2) + pow(result.at<double>(1, 0), 2)+ pow(result.at<double>(2, 0), 2));
+	
+	cout << "镜头距离第"<<time+1<<"个装甲板中心的距离为："<<distance/10<<"cm" << endl;
 	
 }
 
@@ -303,14 +371,14 @@ void onceTime(Mat img) {
 
 	//将轮廓画出来
 	for (int i = 0; i < twoParallel.size(); i++) {
-		picture(img, turnToContours(twoParallel[i].one), turnToContours(twoParallel[i].two));
+		picture(img, turnToContours(twoParallel[i].one), turnToContours(twoParallel[i].two),i);
 	}
 
 	//展示图像
 	imshow("img", img);
 }
 
-void main() {
+int main() {
 	//实例化相机
 	VideoCapture capture;
 	//帧
@@ -326,4 +394,5 @@ void main() {
 	}
 
 	destroyAllWindows();
+	return 0;
 }
